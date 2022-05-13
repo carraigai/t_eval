@@ -1,0 +1,5 @@
+('yogurt', 4)
+('whole milk', 3)
+('fruit', 2)
+('rice', 2)
+('cream cheese', 2)
