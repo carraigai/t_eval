@@ -1,10 +1,12 @@
 from pyspark.ml.classification import LogisticRegression
 from pyspark.sql import SparkSession
-from pyspark.ml.feature import VectorAssembler, StringIndexer, IndexToString
+from pyspark.ml.feature import VectorAssembler, IndexToString, StringIndexerModel
 
 import argparse
 from pyspark.sql.types import StructType, DoubleType, StringType
+from pyspark.ml import Pipeline
 
+CLASS_LABELS = ['Iris-setosa', 'Iris-versicolor', 'Iris-virginica']
 FEATURE_COLS = ['sepal_length', 'sepal_width', 'petal_length', 'petal_width']
 
 
@@ -15,15 +17,18 @@ def run(master_config, input_file_name, predictions_output):
         .master(master_config) \
         .getOrCreate()
 
+    ## load data
     df = load_df(input_file_name, spark)
 
-    assembler, lr_model, label_indexer = train_model(df)
+    ## train model
+    lr_model = train_model(df)
 
-    ## Test the label_indexer with data
-    result = get_predictions(lr_model, label_indexer, assembler.transform(spark.createDataFrame(
+    ## test model
+    result = get_predictions(lr_model, spark.createDataFrame(
         [(5.1, 3.5, 1.4, 0.2),
-         (6.2, 3.4, 5.4, 2.3)], FEATURE_COLS)))
+         (6.2, 3.4, 5.4, 2.3)], FEATURE_COLS))
 
+    ## write test predictions to file
     write_predictions(predictions_output, result)
 
 
@@ -31,17 +36,15 @@ def train_model(df):
 
     assembler = VectorAssembler(inputCols=FEATURE_COLS, outputCol='features')
 
-    training_data = assembler.transform(df)
-    string_indexer = StringIndexer(inputCol="class", outputCol="label", handleInvalid="error",
-                                   stringOrderType="frequencyDesc")
-    label_indexer = string_indexer.fit(training_data)
-    td = label_indexer.transform(training_data)
+    string_indexer = StringIndexerModel.from_labels(CLASS_LABELS,
+                                                    inputCol="class", outputCol="label", handleInvalid="error")
 
-    # Train the label_indexer
     lr = LogisticRegression(labelCol="label", family="multinomial", regParam=1e5)
-    lr_model = lr.fit(td)
 
-    return assembler, lr_model, label_indexer
+    pipeline = Pipeline(stages=[assembler, string_indexer, lr])
+    lr_model = pipeline.fit(df)
+
+    return lr_model
 
 
 def load_df(input_file_name, spark):
@@ -61,16 +64,18 @@ def load_df(input_file_name, spark):
     return df
 
 
-def get_predictions(lr_model, model, test_data):
+def get_predictions(lr_model, test_data):
 
     predictions = lr_model.transform(test_data)
-    inverter = IndexToString(inputCol="prediction", outputCol="prediction_label", labels=model.labels)
+    inverter = IndexToString(inputCol="prediction", outputCol="prediction_label", labels=CLASS_LABELS)
     inverted = inverter.transform(predictions)
+
     return inverted.select("prediction_label").collect()
 
 
 def write_predictions(predictions_output, result):
     with open(predictions_output, 'w') as f:
+        f.write('class\n')
         for row in result:
             f.write(f'{row.prediction_label} \n')
 
